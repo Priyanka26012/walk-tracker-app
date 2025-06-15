@@ -1,175 +1,279 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
-  StyleSheet,
-  TouchableOpacity,
   Text,
-  AppState,
+  TouchableOpacity,
+  StyleSheet,
   Alert,
+  Platform,
 } from 'react-native';
-import MapView, { Region } from 'react-native-maps';
-import { useWalkTracker } from '../hooks/useWalkTracker';
-import { HomeScreenProps } from '../types/navigation';
-import { formatDuration } from '../utils/common-functions';
-import { locationService } from '../services/locationService';
-import { Coordinate } from '../types/walk';
-import CustomMapView from '../components/MapView';
-import LocationPermissionPopup from '../components/PermissionPopup';
+import MapView, { Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import Geolocation from '@react-native-community/geolocation';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
 
-const INITIAL_REGION = {
-  latitude: 28.7041,
-  longitude: 77.1025,
-  latitudeDelta: 0.0922,
-  longitudeDelta: 0.0421,
-};
+interface Coordinate {
+  latitude: number;
+  longitude: number;
+}
 
-export const HomeScreen = ({ navigation }: HomeScreenProps) => {
-  const mapRef = useRef<MapView>(null);
-  const [lastKnownLocation, setLastKnownLocation] = useState<Coordinate | null>(null);
-  const [initialMapRegion, setInitialMapRegion] = useState<Region>(INITIAL_REGION);
+interface Walk {
+  id: string;
+  coordinates: Coordinate[];
+  duration: number;
+  timestamp: number;
+}
 
-  const {
-    isTracking,
-    currentWalk,
-    currentLocation,
-    startWalk,
-    stopWalk,
-    showPermissionModal,
-    setShowPermissionModal,
-    elapsedTime,
-  } = useWalkTracker();
-  // Load initial region from storage
-  useEffect(() => {
-    const loadInitialRegion = async () => {
-      try {
-        const savedLocation = await locationService.getLastLocation();
-        if (savedLocation && typeof savedLocation === 'object' && 'latitude' in savedLocation && 'longitude' in savedLocation) {
-          const location = savedLocation as Coordinate;
-          setInitialMapRegion({
-            latitude: location.latitude,
-            longitude: location.longitude,
-            latitudeDelta: 0.001,
-            longitudeDelta: 0.001,
-          });
-        }
-      } catch (error) {
-        console.error('Error loading initial region:', error);
-      }
-    };
-    loadInitialRegion();
-    // Save location when component unmounts or user navigates away
-    return () => {
-      if (currentLocation) {
-        locationService.storeLocation(currentLocation);
-      }
-    };
-  }, [currentLocation]);
-
-  // Save location when app goes to background
-  useEffect(() => {
-    const handleAppStateChange = (nextAppState: string) => {
-      if (nextAppState === 'background' && currentLocation) {
-        locationService.storeLocation(currentLocation);
-      }
-    };
-
-    const subscription = AppState.addEventListener('change', handleAppStateChange);
-    return () => {
-      subscription.remove();
-    };
-  }, [currentLocation]);
+const HomeScreen = ({ navigation }: any) => {
+  const [isWalking, setIsWalking] = useState(false);
+  const [currentLocation, setCurrentLocation] = useState<Coordinate | null>(null);
+  const [walkCoordinates, setWalkCoordinates] = useState<Coordinate[]>([]);
+  const [walkDuration, setWalkDuration] = useState(0);
+  const [watchId, setWatchId] = useState<number | null>(null);
+  const [startTime, setStartTime] = useState<number | null>(null);
+  const [locationPermissionGranted, setLocationPermissionGranted] = useState(false);
 
   useEffect(() => {
-    if (currentLocation) {
-      setLastKnownLocation(currentLocation);
-      if (isTracking && mapRef.current) {
-        mapRef.current.animateToRegion({
-          latitude: currentLocation.latitude,
-          longitude: currentLocation.longitude,
-          latitudeDelta: 0.001,
-          longitudeDelta: 0.001,
-        }, 500);
-      }
-    }
-  }, [currentLocation, isTracking]);
+    requestLocationPermission();
+  }, []);
 
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('beforeRemove', () => {
-      if (isTracking) {
-        stopWalk();
-      }
-    });
-    return unsubscribe;
-  }, [navigation, isTracking, stopWalk]);
-
-
-
-  const handleStartStop = () => {
-    if (isTracking) {
-      // Check if walk should be saved
-      const noMovement = !currentWalk || !currentWalk.coordinates || currentWalk.coordinates.length <= 1;
-      if (elapsedTime === 0 || noMovement) {
+  const getCurrentLocation = useCallback(() => {
+    Geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        setCurrentLocation({ latitude, longitude });
+        console.log('Location obtained:', { latitude, longitude });
+      },
+      (error) => {
+        console.error('Location error:', error);
         Alert.alert(
-          'Walk Not Saved',
-          'To save the walk you need to move.',
-          [{ text: 'OK' }]
+          'Location Error', 
+          'Unable to get current location. Please make sure GPS is enabled and try again.',
+          [
+            { text: 'Retry', onPress: getCurrentLocation },
+            { text: 'Cancel', style: 'cancel' }
+          ]
         );
-        stopWalk(false);
-        return;
+      },
+      { 
+        enableHighAccuracy: true, 
+        timeout: 20000, 
+        maximumAge: 10000 
       }
-      stopWalk();
-    } else {
-      startWalk();
+    );
+  }, []);
+
+  useEffect(() => {
+    if (locationPermissionGranted) {
+      getCurrentLocation();
+    }
+  }, [locationPermissionGranted, getCurrentLocation]);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isWalking && startTime) {
+      interval = setInterval(() => {
+        setWalkDuration(Math.floor((Date.now() - startTime) / 1000));
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isWalking, startTime]);
+
+  const requestLocationPermission = async () => {
+    try {
+      let permission;
+      if (Platform.OS === 'ios') {
+        permission = PERMISSIONS.IOS.LOCATION_WHEN_IN_USE;
+      } else {
+        permission = PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION;
+      }
+
+      const result = await request(permission);
+      if (result === RESULTS.GRANTED) {
+        setLocationPermissionGranted(true);
+      } else {
+        Alert.alert(
+          'Permission Required', 
+          'Location permission is required to track walks. Please enable it in settings.',
+          [
+            { text: 'OK', onPress: () => {} }
+          ]
+        );
+      }
+    } catch (error) {
+      console.error('Permission error:', error);
+      Alert.alert('Error', 'Failed to request location permission');
     }
   };
 
+  const startWalk = () => {
+    if (!locationPermissionGranted) {
+      Alert.alert('Permission Required', 'Please grant location permission first.');
+      requestLocationPermission();
+      return;
+    }
+
+    if (!currentLocation) {
+      Alert.alert(
+        'Location Not Available', 
+        'Getting your location... Please wait a moment and try again.',
+        [
+          { text: 'Get Location', onPress: getCurrentLocation },
+          { text: 'Cancel', style: 'cancel' }
+        ]
+      );
+      getCurrentLocation();
+      return;
+    }
+
+    console.log('Starting walk with location:', currentLocation);
+    setIsWalking(true);
+    setStartTime(Date.now());
+    setWalkCoordinates([currentLocation]);
+    setWalkDuration(0);
+
+    const id = Geolocation.watchPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        const newCoordinate = { latitude, longitude };
+        console.log('New coordinate:', newCoordinate);
+        setCurrentLocation(newCoordinate);
+        setWalkCoordinates(prev => [...prev, newCoordinate]);
+      },
+      (error) => {
+        console.error('Watch position error:', error);
+        Alert.alert('Tracking Error', 'GPS tracking encountered an issue. Walk will continue with last known location.');
+      },
+      { 
+        enableHighAccuracy: true, 
+        distanceFilter: 5,
+        interval: 5000,
+        fastestInterval: 2000
+      }
+    );
+
+    setWatchId(id);
+  };
+
+  const stopWalk = async () => {
+    if (watchId !== null) {
+      Geolocation.clearWatch(watchId);
+      setWatchId(null);
+    }
+
+    setIsWalking(false);
+
+    if (walkCoordinates.length > 1) {
+      const walk: Walk = {
+        id: Date.now().toString(),
+        coordinates: walkCoordinates,
+        duration: walkDuration,
+        timestamp: Date.now(),
+      };
+
+      try {
+        const existingWalks = await AsyncStorage.getItem('walks');
+        const walks = existingWalks ? JSON.parse(existingWalks) : [];
+        walks.push(walk);
+        await AsyncStorage.setItem('walks', JSON.stringify(walks));
+        Alert.alert('Success', 'Walk saved successfully!');
+      } catch (error) {
+        console.error('Save error:', error);
+        Alert.alert('Error', 'Failed to save walk');
+      }
+    }
+
+    setWalkCoordinates([]);
+    setWalkDuration(0);
+    setStartTime(null);
+  };
+
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
 
   return (
     <View style={styles.container}>
-      <CustomMapView
+      <MapView
+        provider={PROVIDER_GOOGLE}
         style={styles.map}
-        initialRegion={initialMapRegion}
-        showsUserLocation={false}
-        showsMyLocationButton
-        followsUserLocation={isTracking}
-        showsCompass
-        showsScale
-        showsBuildings
-        showsIndoorLevelPicker
-        moveOnMarkerPress={false}
-        maxZoomLevel={20}
-        minZoomLevel={3}
-        zoomEnabled={true}
-        zoomControlEnabled={true}
-        currentCords={currentWalk?.coordinates || []}
-        currentLocation={currentLocation || { latitude: lastKnownLocation?.latitude || 0, longitude: lastKnownLocation?.longitude || 0 }}
-      />
+        region={currentLocation ? {
+          latitude: currentLocation.latitude,
+          longitude: currentLocation.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        } : undefined}
+        showsUserLocation={true}
+        followsUserLocation={true}
+      >
+        {walkCoordinates.length > 1 && (
+          <Polyline
+            coordinates={walkCoordinates}
+            strokeColor="#007AFF"
+            strokeWidth={4}
+          />
+        )}
+      </MapView>
+
+      {/* Debug Status */}
+      <View style={styles.debugContainer}>
+        <Text style={styles.debugText}>
+          Permission: {locationPermissionGranted ? '✅' : '❌'} | 
+          Location: {currentLocation ? '✅' : '❌'}
+        </Text>
+        {currentLocation && (
+          <Text style={styles.debugText}>
+            Lat: {currentLocation.latitude.toFixed(6)}, Lng: {currentLocation.longitude.toFixed(6)}
+          </Text>
+        )}
+      </View>
+
       <View style={styles.controls}>
-        {isTracking && currentWalk && (
-          <View style={styles.timerContainer}>
-            <Text style={styles.timer}>
-              {formatDuration(elapsedTime)}
+        {isWalking && (
+          <View style={styles.durationContainer}>
+            <Text style={styles.durationText}>
+              Duration: {formatDuration(walkDuration)}
             </Text>
           </View>
         )}
+
         <TouchableOpacity
-          style={[styles.button, isTracking ? styles.stopButton : styles.startButton]}
-          onPress={handleStartStop}
+          style={[styles.button, isWalking ? styles.stopButton : styles.startButton]}
+          onPress={isWalking ? stopWalk : startWalk}
+          disabled={!locationPermissionGranted || !currentLocation}
         >
           <Text style={styles.buttonText}>
-            {isTracking ? 'Stop Walk' : 'Start Walk'}
+            {isWalking ? 'Stop Walk' : 'Start Walk'}
           </Text>
         </TouchableOpacity>
 
+        {!locationPermissionGranted && (
+          <TouchableOpacity
+            style={styles.permissionButton}
+            onPress={requestLocationPermission}
+          >
+            <Text style={styles.permissionButtonText}>Grant Location Permission</Text>
+          </TouchableOpacity>
+        )}
+
+        {locationPermissionGranted && !currentLocation && (
+          <TouchableOpacity
+            style={styles.permissionButton}
+            onPress={getCurrentLocation}
+          >
+            <Text style={styles.permissionButtonText}>Get Current Location</Text>
+          </TouchableOpacity>
+        )}
+
         <TouchableOpacity
-          style={[styles.savedWalksButton, isTracking && styles.savedWalksButtonDisabled]}
-          onPress={() => navigation.navigate('SavedWalks')}
-          disabled={isTracking}
+          style={styles.listButton}
+          onPress={() => navigation.navigate('WalkList')}
         >
-          <Text style={[styles.savedWalksButtonText, isTracking && styles.savedWalksButtonTextDisabled]}>View Saved Walks</Text>
+          <Text style={styles.listButtonText}>View Saved Walks</Text>
         </TouchableOpacity>
       </View>
-      <LocationPermissionPopup visible={showPermissionModal} onClose={() => setShowPermissionModal(false)} />
     </View>
   );
 };
@@ -180,24 +284,31 @@ const styles = StyleSheet.create({
   },
   map: {
     flex: 1,
-    backgroundColor: '#f0f0f0',
   },
   controls: {
     position: 'absolute',
-    bottom: 40,
+    bottom: 50,
     left: 20,
     right: 20,
     alignItems: 'center',
   },
+  durationContainer: {
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    marginBottom: 20,
+  },
+  durationText: {
+    color: 'white',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
   button: {
+    paddingHorizontal: 40,
     paddingVertical: 15,
-    paddingHorizontal: 30,
     borderRadius: 25,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
+    marginBottom: 15,
   },
   startButton: {
     backgroundColor: '#4CAF50',
@@ -209,67 +320,43 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 18,
     fontWeight: 'bold',
+    textAlign: 'center',
   },
-  timerContainer: {
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    padding: 8,
-    borderRadius: 20,
-    marginBottom: 20,
-  },
-  timer: {
-    color: 'white',
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  savedWalksButton: {
-    marginTop: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    backgroundColor: '#2196F3',
+  listButton: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 30,
+    paddingVertical: 12,
     borderRadius: 20,
   },
-  savedWalksButtonDisabled: {
-    backgroundColor: '#B0BEC5',
-  },
-  savedWalksButtonText: {
+  listButtonText: {
     color: 'white',
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '600',
   },
-  savedWalksButtonTextDisabled: {
-    color: '#ECEFF1',
-  },
-  markerContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  markerDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#2196F3',
-    borderWidth: 2,
-    borderColor: 'white',
-    zIndex: 2,
-  },
-  markerPulse: {
+  debugContainer: {
     position: 'absolute',
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(33, 150, 243, 0.3)',
-    borderWidth: 1,
-    borderColor: 'rgba(33, 150, 243, 0.5)',
-    zIndex: 1,
+    top: 20,
+    right: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    padding: 10,
+    borderRadius: 10,
   },
-  markerRing: {
-    position: 'absolute',
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(33, 150, 243, 0.2)',
-    borderWidth: 1,
-    borderColor: 'rgba(33, 150, 243, 0.3)',
-    zIndex: 0,
+  debugText: {
+    color: 'white',
+    fontSize: 16,
   },
-}); 
+  permissionButton: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 30,
+    paddingVertical: 12,
+    borderRadius: 20,
+    marginBottom: 15,
+  },
+  permissionButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+});
+
+export default HomeScreen;

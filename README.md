@@ -1,87 +1,73 @@
 # Walk Tracker App
 
-A React Native application that allows users to track their walking routes using GPS and display them on an interactive map.
+A simple React Native app for tracking walks with GPS coordinates and map visualization.
 
 ## Features
 
-- Start/Stop walk tracking
-- Real-time GPS coordinate recording
-- Interactive Google Maps integration
-- Walking duration tracking
-- Save and view past walks
-- Clean and intuitive UI
+- **Start/Stop Walk**: Simple button to start and stop walk tracking
+- **Real-time Tracking**: GPS coordinates recorded while walking
+- **Duration Display**: Shows current walking duration in real-time
+- **Interactive Map**: Google Maps integration showing current location and route
+- **Route Visualization**: Polyline display of walking route during active walk
+- **Local Storage**: Saves completed walks to device storage
+- **Walk History**: List of all saved walks with details
+- **Walk Details**: View individual walk routes on map with statistics
 
-## Prerequisites
+## Screens
 
-- Node.js >= 18
-- React Native development environment set up
-- Google Maps API key for both iOS and Android
+1. **Home Screen**: Map view with start/stop button and duration display
+2. **Walk List Screen**: List of all saved walks
+3. **Walk Detail Screen**: Individual walk route visualization with stats
 
-## Setup Instructions
+## Installation
 
-1. Clone the repository:
+1. Install dependencies:
 ```bash
-git clone <repository-url>
-cd walk-tracker-app
-```
-
-2. Install dependencies:
-```bash
+npm install
+# or
 yarn install
 ```
 
-3. iOS Setup:
+2. For iOS, install pods:
 ```bash
-cd ios
-pod install
-cd ..
+cd ios && pod install
 ```
 
-4. Configure Google Maps:
-   - Get a Google Maps API key from the Google Cloud Console
-   - For iOS: Add your API key to `ios/walkTrackerApp/AppDelegate.mm`
-   - For Android: Add your API key to `android/app/src/main/AndroidManifest.xml`
-
-5. Start the application:
+3. Run the app:
 ```bash
-# For iOS
+# iOS
+npm run ios
+# or
 yarn ios
 
-# For Android
+# Android
+npm run android
+# or
 yarn android
 ```
 
-## Project Structure
+## Permissions
 
-```
-src/
-├── components/     # Reusable UI components
-├── screens/        # Screen components
-├── hooks/         # Custom React hooks
-├── services/      # API and service integrations
-├── utils/         # Utility functions
-└── types/         # TypeScript type definitions
-```
+The app requires location permissions to track walks. It will request permission on first launch.
 
-## Features Implementation
+## Data Structure
 
-### Core Features
-- Location tracking using react-native-maps
-- Walk recording with GPS coordinates
-- Local storage using AsyncStorage
-- Navigation using React Navigation
+Walks are stored locally with the following structure:
+- `id`: Unique identifier
+- `coordinates`: Array of GPS coordinates (latitude, longitude)
+- `duration`: Walk duration in seconds
+- `timestamp`: When the walk was completed
 
-### Screens
-1. Home Screen
-   - Interactive map
-   - Start/Stop walk button
-   - Walking timer
-   - Current route display
+## Usage
 
-2. Saved Walks Screen
-   - List of completed walks
-   - Walk details (date, duration)
-   - Map view of saved routes
+1. **Start a Walk**: Tap "Start Walk" on the home screen
+2. **During Walk**: See real-time duration and route on map
+3. **Stop Walk**: Tap "Stop Walk" to save the walk
+4. **View Walks**: Tap "View Saved Walks" to see all walks
+5. **Walk Details**: Tap any walk in the list to see detailed route and stats
+6. **Delete Walks**: Use the delete button in the walk list
+
+The app is designed to be simple and focused on core walk tracking functionality.
 
 ## Known Limitations
 
