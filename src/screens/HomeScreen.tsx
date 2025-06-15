@@ -7,7 +7,7 @@ import {
   Alert,
   Platform,
 } from 'react-native';
-import MapView, { Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Polyline, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import Geolocation from '@react-native-community/geolocation';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
@@ -208,6 +208,14 @@ const HomeScreen = ({ navigation }: any) => {
         showsUserLocation={true}
         followsUserLocation={true}
       >
+        {currentLocation && (
+          <Marker
+            coordinate={currentLocation}
+            title="You are here"
+            description="Your current location"
+            pinColor="red"
+          />
+        )}
         {walkCoordinates.length > 1 && (
           <Polyline
             coordinates={walkCoordinates}

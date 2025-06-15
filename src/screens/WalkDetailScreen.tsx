@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
+  TouchableOpacity,
 } from 'react-native';
-import MapView, { Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Polyline, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 
 interface Coordinate {
   latitude: number;
@@ -20,6 +21,8 @@ interface Walk {
 
 const WalkDetailScreen = ({ route }: any) => {
   const { walk }: { walk: Walk } = route.params;
+  const mapRef = useRef<MapView>(null);
+  const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -75,34 +78,162 @@ const WalkDetailScreen = ({ route }: any) => {
       maxLng = Math.max(maxLng, coord.longitude);
     });
 
-    const latDelta = (maxLat - minLat) * 1.2; // Add 20% padding
-    const lngDelta = (maxLng - minLng) * 1.2;
+    const latDelta = (maxLat - minLat) * 1.1; // Slightly increased padding for better visibility
+    const lngDelta = (maxLng - minLng) * 1.1;
 
     return {
       latitude: (minLat + maxLat) / 2,
       longitude: (minLng + maxLng) / 2,
-      latitudeDelta: Math.max(latDelta, 0.01), // Minimum zoom level
-      longitudeDelta: Math.max(lngDelta, 0.01),
+      latitudeDelta: Math.max(latDelta, 0.005), // Increased minimum zoom for better path visibility
+      longitudeDelta: Math.max(lngDelta, 0.005),
     };
   };
 
   const distance = calculateDistance(walk.coordinates);
 
+  const zoomToLocation = (coordinate: Coordinate, zoomLevel: number = 0.002) => {
+    if (mapRef.current) {
+      mapRef.current.animateToRegion({
+        latitude: coordinate.latitude,
+        longitude: coordinate.longitude,
+        latitudeDelta: zoomLevel,
+        longitudeDelta: zoomLevel,
+      }, 1000);
+    }
+  };
+
+  const handlePolylinePress = (event: any) => {
+    const { coordinate } = event.nativeEvent;
+    
+    // Find the closest point on the path
+    let closestIndex = 0;
+    let minDistance = Number.MAX_VALUE;
+    
+    walk.coordinates.forEach((coord, index) => {
+      const distance = Math.sqrt(
+        Math.pow(coord.latitude - coordinate.latitude, 2) + 
+        Math.pow(coord.longitude - coordinate.longitude, 2)
+      );
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestIndex = index;
+      }
+    });
+    
+    setSelectedPointIndex(closestIndex);
+    zoomToLocation(walk.coordinates[closestIndex]);
+  };
+
+  const getWaypoints = () => {
+    if (walk.coordinates.length < 10) return [];
+    
+    const waypoints = [];
+    const interval = Math.floor(walk.coordinates.length / 5); // Show 5 waypoints
+    
+    for (let i = interval; i < walk.coordinates.length - interval; i += interval) {
+      waypoints.push({
+        coordinate: walk.coordinates[i],
+        index: i,
+        title: `Point ${i + 1}`,
+        description: `Waypoint along the route`
+      });
+    }
+    
+    return waypoints;
+  };
+
+  const resetZoom = () => {
+    if (mapRef.current) {
+      mapRef.current.animateToRegion(getMapRegion(walk.coordinates)!, 1000);
+      setSelectedPointIndex(null);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <MapView
+        ref={mapRef}
         provider={PROVIDER_GOOGLE}
         style={styles.map}
         region={getMapRegion(walk.coordinates)}
+        showsUserLocation={true}
+        showsMyLocationButton={true}
       >
         {walk.coordinates.length > 1 && (
           <Polyline
             coordinates={walk.coordinates}
             strokeColor="#007AFF"
-            strokeWidth={4}
+            strokeWidth={5}
+            lineCap="round"
+            lineJoin="round"
+            tappable={true}
+            onPress={handlePolylinePress}
+          />
+        )}
+        
+        {/* Start marker */}
+        {walk.coordinates.length > 0 && (
+          <Marker
+            coordinate={walk.coordinates[0]}
+            title="Start"
+            description="Walk started here"
+            pinColor="green"
+            onPress={() => zoomToLocation(walk.coordinates[0])}
+          />
+        )}
+        
+        {/* End marker */}
+        {walk.coordinates.length > 1 && (
+          <Marker
+            coordinate={walk.coordinates[walk.coordinates.length - 1]}
+            title="End"
+            description="Walk ended here"
+            pinColor="red"
+            onPress={() => zoomToLocation(walk.coordinates[walk.coordinates.length - 1])}
+          />
+        )}
+        
+        {/* Waypoint markers */}
+        {getWaypoints().map((waypoint, index) => (
+          <Marker
+            key={`waypoint-${index}`}
+            coordinate={waypoint.coordinate}
+            title={waypoint.title}
+            description={waypoint.description}
+            pinColor="blue"
+            onPress={() => zoomToLocation(waypoint.coordinate)}
+          />
+        ))}
+        
+        {/* Selected point marker */}
+        {selectedPointIndex !== null && (
+          <Marker
+            coordinate={walk.coordinates[selectedPointIndex]}
+            title={`Point ${selectedPointIndex + 1}`}
+            description="Selected location"
+            pinColor="orange"
           />
         )}
       </MapView>
+
+      {/* Zoom controls */}
+      <View style={styles.zoomControls}>
+        <TouchableOpacity style={styles.zoomButton} onPress={resetZoom}>
+          <Text style={styles.zoomButtonText}>Reset View</Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={styles.zoomButton} 
+          onPress={() => walk.coordinates.length > 0 && zoomToLocation(walk.coordinates[0])}
+        >
+          <Text style={styles.zoomButtonText}>Start</Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={styles.zoomButton} 
+          onPress={() => walk.coordinates.length > 1 && zoomToLocation(walk.coordinates[walk.coordinates.length - 1])}
+        >
+          <Text style={styles.zoomButtonText}>End</Text>
+        </TouchableOpacity>
+      </View>
 
       <View style={styles.infoContainer}>
         <Text style={styles.dateText}>{formatDate(walk.timestamp)}</Text>
@@ -172,6 +303,21 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#007AFF',
+  },
+  zoomControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    padding: 10,
+  },
+  zoomButton: {
+    backgroundColor: '#007AFF',
+    padding: 10,
+    borderRadius: 5,
+  },
+  zoomButtonText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: 'white',
   },
 });
 
